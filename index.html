@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#06070d" />
+  <title>IA Holográfica · Control por Gestos</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <!-- Pantalla de inicio -->
+  <div id="splash" class="splash">
+    <div class="splash-logo">
+      <div class="splash-ring"></div>
+      <h1>IA Holográfica</h1>
+      <p>Control por gestos</p>
+    </div>
+    <button id="startBtn" class="btn-primary">Iniciar cámara</button>
+    <p class="splash-hint">Necesitamos acceso a tu cámara para detectar tus manos.</p>
+  </div>
+
+  <!-- Reproductor a pantalla completa -->
+  <main id="stage" class="stage hidden">
+    <video id="player" playsinline preload="auto"></video>
+    <div id="videoTitle" class="video-title"></div>
+    <div id="emptyState" class="empty-state hidden">
+      <p>No se encontró el video.</p>
+      <small>Coloca los archivos en la carpeta <code>videos/</code> como video1.mp4 … video5.mp4</small>
+    </div>
+    <div id="transitionOverlay" class="transition-overlay"></div>
+    <div id="cursor" class="hand-cursor hidden"><span></span></div>
+    <div id="handsLayer" class="hands-layer"></div>
+    <div id="gestureToast" class="gesture-toast"></div>
+    <div id="photoFlash" class="photo-flash"></div>
+    <div id="photoCard" class="photo-card hidden">
+      <canvas id="photoCanvas"></canvas>
+      <div class="photo-actions">
+        <button id="savePhotoBtn" class="btn-primary">Guardar en galería</button>
+        <button id="closePhotoBtn" class="btn-ghost">Cerrar</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Mini cámara de diagnóstico -->
+  <aside id="miniCam" class="mini-cam hidden">
+    <div class="mini-cam-inner">
+      <video id="camVideo" playsinline muted></video>
+      <canvas id="camCanvas"></canvas>
+      <div class="mini-cam-status">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Buscando manos…</span>
+      </div>
+    </div>
+    <div class="mini-cam-meta">
+      <span id="fpsText">-- fps</span>
+      <span id="handsText">0 manos</span>
+    </div>
+  </aside>
+
+  <!-- Botón de configuración -->
+  <button id="settingsBtn" class="settings-btn hidden" aria-label="Configuración">⚙</button>
+
+  <!-- Panel de configuración -->
+  <section id="settingsPanel" class="settings-panel hidden" aria-label="Configuración">
+    <header>
+      <h2>Configuración</h2>
+      <button id="closeSettingsBtn" class="icon-btn" aria-label="Cerrar">✕</button>
+    </header>
+
+    <label class="field">
+      <span>Perfil de dispositivo</span>
+      <select id="cfgProfile">
+        <option value="auto">Automático (recomendado)</option>
+        <option value="high">Alto rendimiento (PC / tablet potente)</option>
+        <option value="balanced">Equilibrado (laptop)</option>
+        <option value="low">Bajo consumo (celular antiguo)</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Resolución de cámara</span>
+      <select id="cfgResolution">
+        <option value="1280x720">1280 × 720</option>
+        <option value="960x540">960 × 540</option>
+        <option value="640x480">640 × 480</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Detección de manos (modelo)</span>
+      <select id="cfgModel">
+        <option value="full">Completo (más preciso)</option>
+        <option value="lite">Ligero (más rápido)</option>
+      </select>
+    </label>
+
+    <label class="field range">
+      <span>Sensibilidad del pellizco <output id="outPinch">0.06</output></span>
+      <input id="cfgPinch" type="range" min="0.03" max="0.12" step="0.005" value="0.06" />
+    </label>
+
+    <label class="field range">
+      <span>Suavizado del cursor <output id="outSmooth">0.35</output></span>
+      <input id="cfgSmooth" type="range" min="0.1" max="0.9" step="0.05" value="0.35" />
+    </label>
+
+    <label class="field range">
+      <span>Tiempo para confirmar gesto (ms) <output id="outHold">450</output></span>
+      <input id="cfgHold" type="range" min="200" max="1000" step="50" value="450" />
+    </label>
+
+    <label class="field check">
+      <input id="cfgMirror" type="checkbox" checked />
+      <span>Espejo de cámara</span>
+    </label>
+
+    <label class="field check">
+      <input id="cfgShowCam" type="checkbox" checked />
+      <span>Mostrar mini cámara</span>
+    </label>
+
+    <label class="field check">
+      <input id="cfgShowSkeleton" type="checkbox" checked />
+      <span>Dibujar manos en pantalla</span>
+    </label>
+
+    <label class="field check">
+      <input id="cfgEffects" type="checkbox" checked />
+      <span>Efectos visuales (brillo, partículas)</span>
+    </label>
+
+    <div class="settings-actions">
+      <button id="resetCfgBtn" class="btn-ghost">Restablecer</button>
+    </div>
+
+    <details class="guide">
+      <summary>Guía de gestos</summary>
+      <ul>
+        <li><b>✋ Palma abierta (una mano)</b>: mueve el cursor.</li>
+        <li><b>🤏 Pellizco</b>: clic sobre botones / cursor.</li>
+        <li><b>👉 Dos manos, deslizar a la derecha</b>: siguiente video.</li>
+        <li><b>👈 Dos manos, deslizar a la izquierda</b>: video anterior.</li>
+        <li><b>✊ Puño (dos manos)</b>: pausa / reproducir.</li>
+        <li><b>✌ Paz (una mano)</b>: adelantar 10 s.</li>
+        <li><b>🤙 Llamada (una mano)</b>: retroceder 10 s.</li>
+        <li><b>👍 Pulgar arriba</b>: subir volumen. <b>👎 Pulgar abajo</b>: bajar volumen.</li>
+        <li><b>☝ Índice arriba</b>: mostrar / ocultar configuración.</li>
+        <li><b>🤟 Te quiero (una mano)</b>: pantalla completa.</li>
+        <li><b>❤ Corazón (dos manos)</b>: tomar foto recuerdo.</li>
+      </ul>
+    </details>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="js/gestures.js"></script>
+  <script src="js/effects.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/photo.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
