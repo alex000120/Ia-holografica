@@ -38,16 +38,29 @@
     return { lm, ext, size, count, pinchRatio, gesture, wrist };
   }
 
-  /* Forma de corazón con dos manos: índices y pulgares se tocan formando el contorno */
+  /* Corazón con dos manos (seña de dedos): las puntas de los índices se juntan arriba
+     y los pulgares se acercan abajo. No exige que el pulgar esté "extendido", porque
+     en esta seña el pulgar casi siempre queda doblado hacia el índice. */
   function isHeart(A, B) {
-    const onlyIndexThumb = (h) => h.ext.index && h.ext.thumb && !h.ext.middle && !h.ext.ring && !h.ext.pinky;
-    if (!onlyIndexThumb(A) || !onlyIndexThumb(B)) return false;
+    const fingersCurled = (h) => [h.ext.middle, h.ext.ring, h.ext.pinky].filter(Boolean).length <= 1;
+    if (!fingersCurled(A) || !fingersCurled(B)) return false;
+    // Las dos manos deben tener un tamaño parecido (misma distancia a la cámara)
+    const ratio = A.size / B.size;
+    if (ratio < 0.5 || ratio > 2) return false;
     const sz = (A.size + B.size) / 2;
-    const idxGap = dist(A.lm[8], B.lm[8]) / sz;
-    const thumbGap = dist(A.lm[4], B.lm[4]) / sz;
-    const openA = dist(A.lm[4], A.lm[8]) / A.size;
+    const idxGap = dist(A.lm[8], B.lm[8]) / sz;      // puntas de índice juntas
+    const thumbGap = dist(A.lm[4], B.lm[4]) / sz;    // pulgares cerca
+    const openA = dist(A.lm[4], A.lm[8]) / A.size;   // índice y pulgar forman la curva
     const openB = dist(B.lm[4], B.lm[8]) / B.size;
-    return idxGap < 0.9 && thumbGap < 1.3 && openA > 0.28 && openB > 0.28;
+    return idxGap < 1.1 && thumbGap < 1.6 && openA > 0.12 && openA < 1.6 && openB > 0.12 && openB < 1.6;
+  }
+
+  /* Gesto combinado según las dos manos (o null) */
+  function comboNameFor(A, B) {
+    if (A.gesture === "fist" && B.gesture === "fist") return "bothFist";
+    if (A.gesture === "peace" && B.gesture === "peace") return "bothPeace";
+    if (isHeart(A, B)) return "heart";
+    return null;
   }
 
   /* ---------- Estado ---------- */
@@ -61,7 +74,8 @@
   let lastCombinedFire = 0, lastSwipeFire = 0;
   let swipeHistory = [];
   let slots = { L: null, R: null };
-  let combined = { name: null, since: 0, fired: false };
+  let combined = { name: null, since: 0, lastSeen: 0, fired: false };
+  const COMBO_TOLERANCE = 220; // ms que un gesto combinado aguanta un parpadeo de detección
 
   function emit(type, detail) { emitter.dispatchEvent(new CustomEvent(type, { detail })); }
 
@@ -90,11 +104,27 @@
     }
   }
 
+  function isComboActive(now) {
+    return !!combined.name && now - combined.lastSeen < COMBO_TOLERANCE;
+  }
+
+  function comboProgress(now, cfg) {
+    if (!isComboActive(now)) return 0;
+    return Math.min(1, (now - combined.since) / Math.max(1, cfg.holdMs));
+  }
+
   function updateCombined(name, now, cfg) {
-    if (name !== combined.name) { combined = { name, since: now, fired: false }; }
-    if (!name || combined.fired) return;
-    const need = name === "heart" ? cfg.holdMs + 250 : cfg.holdMs;
-    if (now - combined.since >= need) {
+    if (name) {
+      if (name !== combined.name) combined = { name, since: now, lastSeen: now, fired: false };
+      else combined.lastSeen = now;
+    } else {
+      // Sin gesto: sólo se olvida tras un rato, para no perder el conteo por un parpadeo
+      if (combined.name && now - combined.lastSeen < COMBO_TOLERANCE) return;
+      combined = { name: null, since: now, lastSeen: now, fired: false };
+      return;
+    }
+    if (combined.fired) return;
+    if (now - combined.since >= cfg.holdMs) {
       combined.fired = true;
       lastCombinedFire = now;
       emit("gesture", { name, scope: "two" });
@@ -142,6 +172,12 @@
       slots[k].seen = now;
     });
 
+    // Si hay un gesto de dos manos (o uno en curso), los gestos de una mano se ignoran
+    // para que el corazón no active "ajustes" ni haga clic con el pellizco.
+    const A = present.L, B = present.R;
+    const comboNow = A && B ? comboNameFor(A, B) : null;
+    const suppress = !!comboNow || isComboActive(now);
+
     const out = [];
     ["L", "R"].forEach((k) => {
       const s = slots[k];
@@ -151,7 +187,7 @@
       // Pellizco con histéresis para evitar parpadeos
       const T = cfg.pinchThreshold * 5;
       const wasPinching = s.pinching;
-      s.pinching = wasPinching ? a.pinchRatio < T * 1.35 : a.pinchRatio < T;
+      s.pinching = !suppress && (wasPinching ? a.pinchRatio < T * 1.35 : a.pinchRatio < T);
       const pinchStart = s.pinching && !wasPinching;
       const pinchEnd = !s.pinching && wasPinching;
 
@@ -162,7 +198,7 @@
       s.cur = { x: lerp(s.cur.x, target.x, alpha), y: lerp(s.cur.y, target.y, alpha) };
 
       const gesture = s.pinching ? "pinch" : a.gesture;
-      updateSingle(s, s.pinching ? null : a.gesture, now, cfg);
+      updateSingle(s, s.pinching || suppress ? null : a.gesture, now, cfg);
 
       out.push({
         id: k, label: k === "L" ? "Izquierda" : "Derecha", lm: a.lm, ext: a.ext,
@@ -172,19 +208,11 @@
     });
 
     // Gestos combinados (dos manos)
-    const A = present.L, B = present.R;
+    updateCombined(comboNow, now, cfg);
     if (A && B) {
-      let name = null;
-      if (A.gesture === "fist" && B.gesture === "fist") name = "bothFist";
-      else if (A.gesture === "peace" && B.gesture === "peace") name = "bothPeace";
-      else if (isHeart(A, B)) name = "heart";
-      updateCombined(name, now, cfg);
-
       const bothPalm = A.gesture === "palm" && B.gesture === "palm";
-      const cx = (A.palmCenter || A.lm[9]).x + (B.lm[9]).x;
-      detectSwipe(now, cfg, bothPalm, cx / 2);
+      detectSwipe(now, cfg, bothPalm, (A.lm[9].x + B.lm[9].x) / 2);
     } else {
-      updateCombined(null, now, cfg);
       swipeHistory = [];
     }
 
@@ -192,7 +220,11 @@
     out.forEach((h) => { if (h.pinchStart) emit("pinch", { hand: h.id, state: "down", cursor: h.cursor }); });
     out.forEach((h) => { if (h.pinchEnd) emit("pinch", { hand: h.id, state: "up", cursor: h.cursor }); });
 
-    lastFrame = { hands: out, fps, count: out.length, t: now };
+    const activeName = isComboActive(now) ? combined.name : null;
+    lastFrame = {
+      hands: out, fps, count: out.length, t: now,
+      combined: { name: activeName, progress: comboProgress(now, cfg) }
+    };
     emit("frame", lastFrame);
     drawMini(results, out, cfg);
   }
@@ -227,6 +259,15 @@
       miniCtx.fillStyle = color;
       miniCtx.fillText(`${hd.label}: ${tag}`, hd.lm[0].x * w, hd.lm[0].y * h - 10);
     });
+    // Banner del gesto de dos manos y su progreso (para diagnosticar el corazón)
+    if (lastFrame && lastFrame.combined && lastFrame.combined.name) {
+      const c = lastFrame.combined;
+      const names = { heart: "❤ Corazón", bothFist: "✊✊ Dos puños", bothPeace: "✌✌ Dos paz" };
+      const pct = Math.round(c.progress * 100);
+      miniCtx.font = `700 ${Math.round(h * 0.07)}px system-ui, sans-serif`;
+      miniCtx.fillStyle = "#ffd23d";
+      miniCtx.fillText(`${names[c.name] || c.name} ${pct}%`, 12, Math.round(h * 0.09));
+    }
     miniCtx.restore();
   }
 
@@ -252,8 +293,8 @@
     h.setOptions({
       maxNumHands: 2,
       modelComplexity: cfg.modelComplexity,
-      minDetectionConfidence: 0.6,
-      minTrackingConfidence: 0.5,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.4,
       selfieMode: false
     });
     h.onResults(onResults);

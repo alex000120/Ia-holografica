@@ -168,6 +168,16 @@
 
     const now = performance.now();
     if (frame.count > 0) lastSeenHand = now;
+
+    // Progreso de un gesto de dos manos (corazón, dos puños…): se actualiza en cada frame
+    const c = frame.combined;
+    if (c && c.name) {
+      const txt = { heart: "❤ Mantén el corazón", bothFist: "✊✊ Mantén los puños", bothPeace: "✌✌ Mantén la paz" };
+      setStatus("ok", `${txt[c.name] || c.name} · ${Math.round(c.progress * 100)}%`);
+      lastStatusAt = now;
+      return;
+    }
+
     if (now - lastStatusAt > 400) {
       lastStatusAt = now;
       els.handsText.textContent = `${frame.count} ${frame.count === 1 ? "mano" : "manos"}`;
